@@ -2,14 +2,13 @@
 #California Bathymetry Data
 #Zoë J. Kitchel
 #Created 30 October 2023
-#Modified 30 October 2023
+#Modified 11 December 2023
 ##############################################################################
 #There are multiple options for where to get bathymetry data:
   #1) Marmap package (but our sites may be too close to shore for this to work, example below anyway though)
   #2) Full state of California out to 200 eez lower rez: https://wildlife.ca.gov/Conservation/Marine/GIS/Downloads (Arc/Info Binary Grid (ADF) )
             #200mEEZ_BathyGrids.zip > bd200m_v2i
-  #3) Full state of California higher rez (but data is currently offline) http://seafloor.otterlabs.org/SFMLwebDATA_SURVEYMAP.htm
-      #Or, another fine scale option: https://pubs.usgs.gov/ds/487/ds487_text.pdf (3m res)
+  #3) USGS, SoCal only, "A Seamless, High-Resolution, Coastal Digital Elevation Model (DEM) for Southern California": https://pubs.usgs.gov/ds/487/ds487_text.pdf
   #4) We have some (limited) site specific bathymetry. Talk to Chelsea.
 
 ##############################################################################
@@ -132,15 +131,11 @@ ggplot() +
         legend.justification = c("right", "top"),
         legend.box.just = "right")
 
-
-###########################################################################
-#3) California from 
-############################################################################
-
 ############################################################################
 #Link to 200m isobath (typically high Chl-a along the shelf break that closely follows the 200 m isobath)
+#200m isobath defined by CDFW
 ############################################################################
-  
+
 CA_contours_5m <- read_sf(file.path("raw_data","contours_5m","contours_5m.shp"))
 
 CA_200m_contour <- CA_contours_5m %>% filter(CONTOUR == -200)
@@ -180,3 +175,101 @@ autoplot.bathy(bathy_VRG, geom=c("tile"
         legend.position = c(0.93, 1.1),
         legend.justification = c("right", "top"),
         legend.box.just = "right")
+
+
+
+###########################################################################
+#3) California from Barnard and Hoover 2010
+#Barnard, P.L., and Hoover, D., 2010, A seamless, high-resolution coastal 
+#digital elevation model (DEM) for southern California. U.S. Geological Survey Data Series 487, 8 p. and database
+
+###Note this is for southern california only (map coverage_area to check extent
+############################################################################
+
+#only download files you need, and delete after
+#check if you've done this already
+if(!file.exists(file.path("raw_data", "Barnard_hoover_2010", "DEMCoverageAreas.shp"))) {
+#download key (where is what ID)
+
+# Define the URL of the zip file
+zip_url <- "https://pubs.usgs.gov/ds/487/data/DEMCoverageAreas/DEMCoverageAreas.zip"
+
+# Create a temporary directory
+temp_dir <- tempdir()
+
+# Create a temporary file to save the downloaded zip file
+zip_file <- file.path(temp_dir, "temp_download.zip")
+
+# Download the zip file
+download.file(zip_url, destfile = zip_file, mode = "wb")
+
+# Extract the contents of the zip file to the temporary directory
+unzip(zip_file, exdir = temp_dir)
+
+# List the files in the temporary directory (optional)
+extracted_files <- list.files(temp_dir, full.names = TRUE)
+
+#move these files to Barnard_hoover_2010 folder in repository
+
+files_to_move <- grep("DEMCoverageAreas", extracted_files, value = TRUE)
+
+# Replace 'target_directory' with the path to your desired target directory
+target_directory <- "raw_data/Barnard_hoover_2010"
+
+# Move files to the target directory
+file.rename(files_to_move, file.path(target_directory, basename(files_to_move)))
+
+}
+
+#make simple feature 
+coverage_area <- read_sf(file.path("raw_data","Barnard_hoover_2010","DEMCoverageAreas.shp"))
+
+#transform lat lon to match CRS of reference shapefile
+VRG_lat_lon_all.sf <- st_as_sf(VRG_lat_lon_all.r, coords = c("Longitude", "Latitude"), crs = 4326) %>% 
+                                        st_transform(crs = crs(coverage_area))
+
+
+
+#combine points and relevant DEM boundaries (DEM_ID)
+
+VRG_lat_lon_DEM_link <- st_intersection(VRG_lat_lon_all.sf, coverage_area)
+
+
+
+#DEM_ID, convert to lowercase and put into single vector
+DEM_to_download <- tolower(levels(factor(VRG_lat_lon_DEM_link$DEM_ID)))
+
+#download DEMs one by one to current working directory (temporarily! these are large)
+for (i in 1:length(DEM_to_download)) {
+  file_url <- paste0("https://pubs.usgs.gov/ds/487/data/DEMs/",DEM_to_download[i],".zip")
+  download.file(file_url,paste0(DEM_to_download[i],".zip"))
+
+  unzip(paste0(DEM_to_download[i],".zip"))
+  #remove zip file, only keep la10.txt
+  file.remove(paste0(DEM_to_download[i],".zip"))
+  DEM_single_raster <- raster(paste0(DEM_to_download[i],".txt"))
+
+  #set CRS
+  utm_crs <- "+proj=utm +zone=11 +datum=WGS84 +units=m +no_defs" #from 
+  projection(DEM_single_raster) <- utm_crs
+  
+  #extract relevant lat lon values
+  
+}
+
+# Check if the raster has a CRS
+has_crs <- !is.null(projection(DEM_single_raster))
+
+# Check if the raster has a spatial extent
+has_extent <- !is.null(extent(raster_data))
+
+
+
+
+
+
+
+
+
+
+
