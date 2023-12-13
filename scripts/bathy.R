@@ -9,7 +9,7 @@
   #2) Full state of California out to 200 eez lower rez: https://wildlife.ca.gov/Conservation/Marine/GIS/Downloads (Arc/Info Binary Grid (ADF) )
             #200mEEZ_BathyGrids.zip > bd200m_v2i
   #3) USGS, SoCal only, "A Seamless, High-Resolution, Coastal Digital Elevation Model (DEM) for Southern California": https://pubs.usgs.gov/ds/487/ds487_text.pdf
-  #4) We have some (limited) site specific bathymetry. Talk to Chelsea.
+  #4) We have some (limited) site specific bathymetry. Talk to Chelsea. Not included here.
 
 ##############################################################################
 #SETUP#
@@ -26,10 +26,13 @@ library(marmap) #to pull depth data
 library(rasterVis)
 
 source("Functions_pulling_vrg_data.R") #this function pulls most recent clean version of raw data
+
+options(timeout=1000) #allow more time to download large rasters
+
 ############################################################################
 #Load up all VRG lat longs
 ############################################################################
-events <- pull_VRG_data_files(system = "macos", event = T) #specifically we want raw event data
+events <- pull_VRG_data_files(event = T) #specifically we want raw event data
 
 #flag some strange latitudes and longitudes
 events[,flag_lat := ifelse(Latitude < 31, TRUE, FALSE)][,flag_long := ifelse(Latitude > 33.6 & Longitude > -117.5, TRUE, FALSE)]
@@ -224,50 +227,84 @@ file.rename(files_to_move, file.path(target_directory, basename(files_to_move)))
 #make simple feature 
 coverage_area <- read_sf(file.path("raw_data","Barnard_hoover_2010","DEMCoverageAreas.shp"))
 
+#reduce to lat long
+VRG_lat_lon_all.latlong <- unique(VRG_lat_lon_all.r[,.(Latitude, Longitude)])
+
 #transform lat lon to match CRS of reference shapefile
-VRG_lat_lon_all.sf <- st_as_sf(VRG_lat_lon_all.r, coords = c("Longitude", "Latitude"), crs = 4326) %>% 
+VRG_lat_lon_all.sf <- st_as_sf(VRG_lat_lon_all.latlong, coords = c("Longitude", "Latitude"), crs = 4326) %>% 
                                         st_transform(crs = crs(coverage_area))
 
+#add other lat lon values from previous projection
+VRG_lat_lon_all.sf$Latitude <- VRG_lat_lon_all.latlong$Latitude
+VRG_lat_lon_all.sf$Longitude <- VRG_lat_lon_all.latlong$Longitude
 
 
-#combine points and relevant DEM boundaries (DEM_ID)
+
+#which lat long points link to which relevant DEM boundaries (DEM_ID)
 
 VRG_lat_lon_DEM_link <- st_intersection(VRG_lat_lon_all.sf, coverage_area)
 
 
+#DEM_ID, put into single vector
+DEM_IDs <- levels(factor(VRG_lat_lon_DEM_link$DEM_ID))
 
-#DEM_ID, convert to lowercase and put into single vector
+#convert to lower
 DEM_to_download <- tolower(levels(factor(VRG_lat_lon_DEM_link$DEM_ID)))
+
+#setup data table to take stats
+highres_socal <- data.table()
 
 #download DEMs one by one to current working directory (temporarily! these are large)
 for (i in 1:length(DEM_to_download)) {
+  #relevant lat_lons
+  VRG_lat_lon_DEM_link.subset <- VRG_lat_lon_DEM_link %>% filter(DEM_ID == DEM_IDs[i])
+  
   file_url <- paste0("https://pubs.usgs.gov/ds/487/data/DEMs/",DEM_to_download[i],".zip")
-  download.file(file_url,paste0(DEM_to_download[i],".zip"))
-
+  
+  #download file to working directory
+  download.file(file_url,paste0(DEM_to_download[i],".zip")) #this will vary in time, some up to ~200 MB!
+  
+  #unzip file
   unzip(paste0(DEM_to_download[i],".zip"))
+  
   #remove zip file, only keep la10.txt
   file.remove(paste0(DEM_to_download[i],".zip"))
+  
+  #load up as raster
   DEM_single_raster <- raster(paste0(DEM_to_download[i],".txt"))
 
   #set CRS
-  utm_crs <- "+proj=utm +zone=11 +datum=WGS84 +units=m +no_defs" #from 
+  utm_crs <- "+proj=utm +zone=11 +datum=WGS84 +units=m +no_defs" #from technical documentation
   projection(DEM_single_raster) <- utm_crs
   
-  #extract relevant lat lon values
+  #subset data table
+  highres_socal.subset <- data.table(Longitude = VRG_lat_lon_DEM_link.subset$Longitude,
+                                     Latitude = VRG_lat_lon_DEM_link.subset$Latitude,
+                                     highrez_depth = raster::extract(DEM_single_raster,  VRG_lat_lon_DEM_link.subset))   #extract relevant lat lon values
   
+  #remove raster file
+  file.remove(paste0(DEM_to_download[i],".txt"))
+  
+  #set up datatable
+  highres_socal <- rbind(highres_socal, highres_socal.subset)
 }
 
-# Check if the raster has a CRS
-has_crs <- !is.null(projection(DEM_single_raster))
+#Merge back with DT
+VRG_lat_lon_all.test <- highres_socal[VRG_lat_lon_all.r, on = c("Longitude", "Latitude")] #8597 fall outside 
 
-# Check if the raster has a spatial extent
-has_extent <- !is.null(extent(raster_data))
+#Get a sense of which ones are missing (No islands! And missing some more inshore too!)
+ggplot(data = VRG_lat_lon_all.test) +
+  geom_point(aes(x = Longitude, y = Latitude, color = highrez_depth)) +
+  theme_classic()
 
+#how well correlated with SurveyDepth?
+ggplot(data = VRG_lat_lon_all.test) +
+  geom_point(aes(x = SurveyDepth, y = -highrez_depth)) +
+  geom_smooth(aes(x = SurveyDepth, y = -highrez_depth),method = "lm") +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  theme_classic()
 
-
-
-
-
+#how well correlated?
 
 
 
